@@ -3,3 +3,19 @@ node_modules/
 .env
 __pycache__/
 dist/
+
+# uploads
+backend/uploads/
+
+# chromadb
+backend/chroma_db/
+
+# generated files
+*.pdf
+*.sqlite3
+
+# mac
+.DS_Store
+
+# logs
+*.log
