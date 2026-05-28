@@ -1,0 +1,13 @@
+{
+  "name": "ai-study-assistant-pro-root",
+  "version": "1.0.0",
+  "description": "AI Study Assistant Pro - A full-stack GenAI study tool",
+  "scripts": {
+    "start": "bash run.sh",
+    "backend": "bash start_backend.sh",
+    "frontend": "bash start_frontend.sh"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
+}
