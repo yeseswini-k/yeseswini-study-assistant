@@ -16,8 +16,8 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, Tabl
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
 
-from backend.config import settings
-from backend.rag_service import rag_service
+from config import settings
+from rag_service import rag_service
 import fitz
 import pytesseract
 from PIL import Image
