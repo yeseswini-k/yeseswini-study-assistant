@@ -19,12 +19,12 @@ from reportlab.lib import colors
 from config import settings
 from rag_service import rag_service
 import fitz
-import pytesseract
-from PIL import Image
+# OCR_REMOVED_FOR_RENDER
+# OCR_REMOVED_FOR_RENDER
 import io
-import cv2
-import easyocr
-import numpy as np
+# OCR_REMOVED_FOR_RENDER
+# OCR_REMOVED_FOR_RENDER
+# OCR_REMOVED_FOR_RENDER
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
