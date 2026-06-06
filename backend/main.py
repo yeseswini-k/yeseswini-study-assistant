@@ -5,7 +5,7 @@ import json
 import logging
 from datetime import datetime, timezone, timedelta
 from typing import List, Dict, Any, Optional
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Depends
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Depends, Header
 from fastapi.responses import StreamingResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -16,8 +16,12 @@ from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, Tabl
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
 
-from config import settings
-from rag_service import rag_service
+try:
+    from backend.config import settings
+    from backend.rag_service import rag_service
+except (ModuleNotFoundError, ImportError):
+    from config import settings
+    from rag_service import rag_service
 import fitz
 import pytesseract
 from PIL import Image
@@ -206,6 +210,59 @@ def read_docs_metadata() -> Dict[str, Any]:
 def write_docs_metadata(metadata: Dict[str, Any]):
     with open(DOCUMENT_METADATA_FILE, "w") as f:
         json.dump(metadata, f, indent=4)
+
+def read_user_docs_metadata(user_id: str) -> Dict[str, Any]:
+    from backend.supabase_helper import sync_metadata_from_cloud
+    metadata = sync_metadata_from_cloud(user_id, settings.UPLOAD_DIR)
+    
+    user_upload_dir = os.path.join(settings.UPLOAD_DIR, user_id)
+    os.makedirs(user_upload_dir, exist_ok=True)
+    user_metadata_file = os.path.join(user_upload_dir, "docs_metadata.json")
+    
+    if metadata:
+        try:
+            with open(user_metadata_file, "w") as f:
+                json.dump(metadata, f, indent=4)
+        except Exception as e:
+            logger.error(f"Failed to write local user metadata: {e}")
+        return metadata
+
+    if os.path.exists(user_metadata_file):
+        try:
+            with open(user_metadata_file, "r") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
+
+def write_user_docs_metadata(user_id: str, metadata: Dict[str, Any]):
+    user_upload_dir = os.path.join(settings.UPLOAD_DIR, user_id)
+    os.makedirs(user_upload_dir, exist_ok=True)
+    user_metadata_file = os.path.join(user_upload_dir, "docs_metadata.json")
+    
+    try:
+        with open(user_metadata_file, "w") as f:
+            json.dump(metadata, f, indent=4)
+    except Exception as e:
+        logger.error(f"Failed to write local user metadata: {e}")
+        
+    from backend.supabase_helper import sync_metadata_to_cloud
+    sync_metadata_to_cloud(user_id, metadata)
+
+def get_current_user_id(authorization: Optional[str] = Header(None)) -> str:
+    from backend.supabase_helper import verify_token, supabase_configured
+    if not supabase_configured:
+        return "local-user"
+    
+    if not authorization:
+        raise HTTPException(status_code=401, detail="Authorization header is missing.")
+    
+    try:
+        decoded = verify_token(authorization)
+        return decoded.get("uid", "local-user")
+    except Exception as e:
+        logger.error(f"Auth token validation failed: {e}")
+        raise HTTPException(status_code=401, detail="Authentication failed or session expired.")
 
 def detect_academic_intent(message: str) -> Optional[str]:
     msg = message.lower()
@@ -487,7 +544,7 @@ def configure_knowledge_mode(
             "1. Ground all core facts, technical concepts, theories, and formulas in the provided RETRIEVED STUDENT DOCS CONTEXT. Do not invent facts that contradict or are entirely absent from the context.\n"
             "2. You are encouraged to structure, elaborate, explain, and synthesize the context. You may add standard academic structuring (e.g. Introduction, Definition, detailed explanations, real-world examples, advantages, and Conclusion) where appropriate.\n"
             "3. Do NOT write inline citations, source tags, document names, or page numbers (like [Filename.pdf, Page X]) inside the generated text. Keep the text clean and natural.\n"
-            "4. If the provided context is completely empty or does not contain any relevant information about the topic at all, you must respond EXACTLY with:\n"
+            "4. If the user asks a general question (such as \"explain all\", \"explain\", \"summarize\", \"tell me about this\", \"what is this\"), you should summarize or explain the provided context in detail using ONLY the facts explicitly mentioned in the context. Otherwise, if the provided context does not contain enough information to answer the user's specific question, you must respond EXACTLY with:\n"
             "   \"The selected material does not contain enough information to answer this question.\"\n"
             "   Do not add any preamble or greeting.\n\n"
             f"Academic Mode Instructions:\n{academic_instr}\n\n"
@@ -502,7 +559,7 @@ def configure_knowledge_mode(
             "2. Do NOT use any pre-trained world knowledge or external assumptions. If it's not in the context, do not explain or assume it.\n"
             "3. Do NOT add filler explanations, outside examples, or external context.\n"
             "4. Every statement you make must be directly backed by the provided context. Do NOT write inline citations, source tags, document names, or page numbers (like [Filename.pdf, Page X]) inside the generated text. Keep the text clean, natural, and formatted like polished study notes.\n"
-            "5. If the provided context does not contain enough information to answer the user's question or generate the requested content, you must respond EXACTLY with:\n"
+            "5. If the user asks a general question (such as \"explain all\", \"explain\", \"summarize\", \"tell me about this\", \"what is this\"), you should summarize or explain the provided context in detail using ONLY the facts explicitly mentioned in the context. Otherwise, if the provided context does not contain enough information to answer the user's specific question, you must respond EXACTLY with:\n"
             "   \"The selected material does not contain enough information to answer this question.\"\n"
             "   Do not add any preamble, greeting, or explanation.\n\n"
             f"Base Instructions:\n{base_prompt_instruction}\n\n"
@@ -731,10 +788,13 @@ async def upload_files(
     files: List[UploadFile] = File(...),
     chunk_size: int = Form(1000),
     chunk_overlap: int = Form(200),
-    session_id: Optional[str] = Form(None)
+    session_id: Optional[str] = Form(None),
+    user_id: str = Depends(get_current_user_id)
 ):
     results = []
-    metadata = read_docs_metadata()
+    metadata = read_user_docs_metadata(user_id)
+    user_upload_dir = os.path.join(settings.UPLOAD_DIR, user_id)
+    os.makedirs(user_upload_dir, exist_ok=True)
 
     for file in files:
         filename = file.filename
@@ -750,7 +810,7 @@ async def upload_files(
             })
             continue
 
-        file_path = os.path.join(settings.UPLOAD_DIR, filename)
+        file_path = os.path.join(user_upload_dir, filename)
         
         # Save file to disk
         try:
@@ -758,6 +818,10 @@ async def upload_files(
                 content = await file.read()
                 f.write(content)
                 file_size = len(content)
+            
+            # Upload to cloud if configured
+            from backend.supabase_helper import upload_pdf_to_cloud
+            upload_pdf_to_cloud(user_id, filename, content)
         except Exception as e:
             results.append({
                 "filename": filename,
@@ -789,6 +853,8 @@ async def upload_files(
                 })
                 if os.path.exists(file_path):
                     os.remove(file_path)
+                    from backend.supabase_helper import delete_pdf_from_cloud
+                    delete_pdf_from_cloud(user_id, filename)
         else: # is_pdf
             if is_pdf_scanned(file_path):
                 try:
@@ -813,6 +879,8 @@ async def upload_files(
                     })
                     if os.path.exists(file_path):
                         os.remove(file_path)
+                        from backend.supabase_helper import delete_pdf_from_cloud
+                        delete_pdf_from_cloud(user_id, filename)
             else:
                 try:
                     doc_fitz = fitz.open(file_path)
@@ -834,7 +902,8 @@ async def upload_files(
                         session_id=session_id,
                         upload_type="typed_pdf",
                         source_type="pdf",
-                        ocr_flag=False
+                        ocr_flag=False,
+                        user_id=user_id
                     )
                     
                     if index_res["status"] == "success":
@@ -871,8 +940,10 @@ async def upload_files(
                     })
                     if os.path.exists(file_path):
                         os.remove(file_path)
-
-    write_docs_metadata(metadata)
+                        from backend.supabase_helper import delete_pdf_from_cloud
+                        delete_pdf_from_cloud(user_id, filename)
+ 
+    write_user_docs_metadata(user_id, metadata)
     return {"results": results}
 
 def analyze_and_reconstruct_ocr(raw_text: str, ocr_confidence: float = 100.0) -> dict:
@@ -1077,7 +1148,8 @@ def process_and_index_document_text(
     session_id: str = None,
     upload_type: str = "typed_pdf",
     source_type: str = "pdf",
-    ocr_flag: bool = False
+    ocr_flag: bool = False,
+    user_id: str = "local-user"
 ) -> Dict[str, Any]:
     """
     Extracts text, runs semantic note reconstruction sequentially (batched by 3 pages),
@@ -1098,7 +1170,8 @@ def process_and_index_document_text(
             session_id=session_id,
             upload_type=upload_type,
             source_type=source_type,
-            ocr_flag=ocr_flag
+            ocr_flag=ocr_flag,
+            user_id=user_id
         )
         
         if index_res["status"] == "success":
@@ -1116,11 +1189,11 @@ def process_and_index_document_text(
         return {"status": "error", "message": str(e)}
 
 @app.post("/api/index-text")
-def index_text_endpoint(req: IndexTextRequest):
-    metadata = read_docs_metadata()
+def index_text_endpoint(req: IndexTextRequest, user_id: str = Depends(get_current_user_id)):
+    metadata = read_user_docs_metadata(user_id)
     filename = req.filename
-    file_path = os.path.join(settings.UPLOAD_DIR, filename)
-
+    file_path = os.path.join(settings.UPLOAD_DIR, user_id, filename)
+ 
     try:
         # Run semantic note structure analysis
         analysis = batch_analyze_and_reconstruct_ocr(req.text, req.ocr_confidence or 100.0)
@@ -1130,7 +1203,7 @@ def index_text_endpoint(req: IndexTextRequest):
         upload_type = "scanned_pdf" if is_pdf else "image"
         source_type = "pdf" if is_pdf else "image"
         ocr_flag = True
-
+ 
         index_res = rag_service.index_structured_text(
             filename=filename,
             text=req.text,
@@ -1141,7 +1214,8 @@ def index_text_endpoint(req: IndexTextRequest):
             session_id=req.session_id,
             upload_type=upload_type,
             source_type=source_type,
-            ocr_flag=ocr_flag
+            ocr_flag=ocr_flag,
+            user_id=user_id
         )
         
         if index_res["status"] == "success":
@@ -1159,7 +1233,7 @@ def index_text_endpoint(req: IndexTextRequest):
                 "source_type": source_type,
                 "ocr_flag": ocr_flag
             }
-            write_docs_metadata(metadata)
+            write_user_docs_metadata(user_id, metadata)
             return {
                 "status": "success",
                 "filename": filename,
@@ -1243,48 +1317,58 @@ def correct_ocr_text_endpoint(req: OCRCorrectRequest):
         raise HTTPException(status_code=500, detail=f"LLM correction failed: {str(e)}")
 
 @app.get("/api/documents")
-def list_documents():
-    metadata = read_docs_metadata()
+def list_documents(user_id: str = Depends(get_current_user_id)):
+    metadata = read_user_docs_metadata(user_id)
     return list(metadata.values())
 
 @app.delete("/api/documents/{filename}")
-def delete_document(filename: str):
-    metadata = read_docs_metadata()
+def delete_document(filename: str, user_id: str = Depends(get_current_user_id)):
+    metadata = read_user_docs_metadata(user_id)
     if filename not in metadata:
         raise HTTPException(status_code=404, detail="Document not found.")
 
     # Remove from disk
-    file_path = os.path.join(settings.UPLOAD_DIR, filename)
+    file_path = os.path.join(settings.UPLOAD_DIR, user_id, filename)
     if os.path.exists(file_path):
         os.remove(file_path)
 
+    # Remove from cloud storage
+    from backend.supabase_helper import delete_pdf_from_cloud
+    delete_pdf_from_cloud(user_id, filename)
+
     # Remove from Chroma
-    rag_service.delete_document(filename)
+    rag_service.delete_document(filename, user_id=user_id)
 
     # Update metadata
     del metadata[filename]
-    write_docs_metadata(metadata)
+    write_user_docs_metadata(user_id, metadata)
 
     return {"status": "success", "message": f"Deleted document '{filename}' successfully."}
 
 @app.post("/api/documents/clear")
-def clear_all_documents():
+def clear_all_documents(user_id: str = Depends(get_current_user_id)):
     # Clear directory uploads
-    for file in os.listdir(settings.UPLOAD_DIR):
-        if file != "docs_metadata.json":
-            file_path = os.path.join(settings.UPLOAD_DIR, file)
-            if os.path.isfile(file_path):
-                os.remove(file_path)
+    user_upload_dir = os.path.join(settings.UPLOAD_DIR, user_id)
+    if os.path.exists(user_upload_dir):
+        for file in os.listdir(user_upload_dir):
+            if file != "docs_metadata.json":
+                file_path = os.path.join(user_upload_dir, file)
+                if os.path.isfile(file_path):
+                    os.remove(file_path)
+                    
+                    # Remove from cloud storage
+                    from backend.supabase_helper import delete_pdf_from_cloud
+                    delete_pdf_from_cloud(user_id, file)
     
     # Reset vector store
-    rag_service.clear_all()
+    rag_service.clear_all(user_id=user_id)
 
     # Clear metadata
-    write_docs_metadata({})
+    write_user_docs_metadata(user_id, {})
     return {"status": "success", "message": "All documents cleared."}
 
 @app.post("/api/chat")
-async def chat_stream(request: ChatRequest):
+async def chat_stream(request: ChatRequest, user_id: str = Depends(get_current_user_id)):
     """
     Retrieves context from ChromaDB, constructs dynamic prompt based on explanation level and knowledge mode,
     and streams LLM tokens chunk-by-chunk in JSON Lines structure.
@@ -1326,7 +1410,8 @@ async def chat_stream(request: ChatRequest):
             citations = rag_service.search_similarity(
                 query=search_query,
                 k=top_k,
-                doc_filters=filters
+                doc_filters=filters,
+                user_id=user_id
             )
             if citations:
                 context_str = "\n\n".join([
@@ -1426,7 +1511,7 @@ async def chat_stream(request: ChatRequest):
 
 # Core AI Study Tools
 @app.post("/api/summary")
-def generate_summary(req: ToolRequest):
+def generate_summary(req: ToolRequest, user_id: str = Depends(get_current_user_id)):
     req.knowledge_mode = "strict_rag"
     client = get_groq_client()
     
@@ -1435,7 +1520,7 @@ def generate_summary(req: ToolRequest):
         k = 8
         if req.response_depth in ["detailed", "expert"]:
             k = 12
-        docs = rag_service.search_similarity(query="summary overview main topics concepts", k=k, doc_filters=files)
+        docs = rag_service.search_similarity(query="summary overview main topics concepts", k=k, doc_filters=files, user_id=user_id)
     except Exception as e:
         logger.error(f"RAG search error in generate_summary: {e}")
         docs = []
@@ -1493,7 +1578,7 @@ def generate_summary(req: ToolRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/flashcards")
-def generate_flashcards(req: ToolRequest):
+def generate_flashcards(req: ToolRequest, user_id: str = Depends(get_current_user_id)):
     req.knowledge_mode = "strict_rag"
     client = get_groq_client()
     
@@ -1502,7 +1587,7 @@ def generate_flashcards(req: ToolRequest):
         k = 8
         if req.response_depth in ["detailed", "expert"]:
             k = 12
-        docs = rag_service.search_similarity(query="definitions key terms vocabulary core facts", k=k, doc_filters=files)
+        docs = rag_service.search_similarity(query="definitions key terms vocabulary core facts", k=k, doc_filters=files, user_id=user_id)
     except Exception as e:
         logger.error(f"RAG search error in generate_flashcards: {e}")
         docs = []
@@ -1596,7 +1681,7 @@ def generate_flashcards(req: ToolRequest):
         raise HTTPException(status_code=500, detail="Failed to generate valid flashcards array.")
 
 @app.post("/api/quiz")
-def generate_quiz(req: ToolRequest):
+def generate_quiz(req: ToolRequest, user_id: str = Depends(get_current_user_id)):
     req.knowledge_mode = "strict_rag"
     client = get_groq_client()
     
@@ -1605,7 +1690,7 @@ def generate_quiz(req: ToolRequest):
         k = 8
         if req.response_depth in ["detailed", "expert"]:
             k = 12
-        docs = rag_service.search_similarity(query="facts theories calculations details questions", k=k, doc_filters=files)
+        docs = rag_service.search_similarity(query="facts theories calculations details questions", k=k, doc_filters=files, user_id=user_id)
     except Exception as e:
         logger.error(f"RAG search error in generate_quiz: {e}")
         docs = []
@@ -1714,7 +1799,7 @@ def generate_quiz(req: ToolRequest):
         raise HTTPException(status_code=500, detail="Failed to generate valid quiz questions.")
 
 @app.post("/api/questions")
-def generate_important_questions(req: ToolRequest):
+def generate_important_questions(req: ToolRequest, user_id: str = Depends(get_current_user_id)):
     req.knowledge_mode = "strict_rag"
     client = get_groq_client()
     
@@ -1723,7 +1808,7 @@ def generate_important_questions(req: ToolRequest):
         k = 8
         if req.response_depth in ["detailed", "expert"]:
             k = 12
-        docs = rag_service.search_similarity(query="critical questions testing examination review points", k=k, doc_filters=files)
+        docs = rag_service.search_similarity(query="critical questions testing examination review points", k=k, doc_filters=files, user_id=user_id)
     except Exception as e:
         logger.error(f"RAG search error in generate_important_questions: {e}")
         docs = []
@@ -1784,7 +1869,7 @@ def generate_important_questions(req: ToolRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/formulas")
-def extract_formulas(req: ToolRequest):
+def extract_formulas(req: ToolRequest, user_id: str = Depends(get_current_user_id)):
     req.knowledge_mode = "strict_rag"
     client = get_groq_client()
     
@@ -1793,7 +1878,7 @@ def extract_formulas(req: ToolRequest):
         k = 8
         if req.response_depth in ["detailed", "expert"]:
             k = 12
-        docs = rag_service.search_similarity(query="equations mathematics formulas physics constants functions algorithms", k=k, doc_filters=files)
+        docs = rag_service.search_similarity(query="equations mathematics formulas physics constants functions algorithms", k=k, doc_filters=files, user_id=user_id)
     except Exception as e:
         logger.error(f"RAG search error in extract_formulas: {e}")
         docs = []
@@ -1868,7 +1953,7 @@ def extract_formulas(req: ToolRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/definitions")
-def extract_definitions(req: ToolRequest):
+def extract_definitions(req: ToolRequest, user_id: str = Depends(get_current_user_id)):
     req.knowledge_mode = "strict_rag"
     client = get_groq_client()
     
@@ -1877,7 +1962,7 @@ def extract_definitions(req: ToolRequest):
         k = 8
         if req.response_depth in ["detailed", "expert"]:
             k = 12
-        docs = rag_service.search_similarity(query="glossary vocabulary definitions terms vocabulary", k=k, doc_filters=files)
+        docs = rag_service.search_similarity(query="glossary vocabulary definitions terms vocabulary", k=k, doc_filters=files, user_id=user_id)
     except Exception as e:
         logger.error(f"RAG search error in extract_definitions: {e}")
         docs = []
@@ -1932,7 +2017,7 @@ def extract_definitions(req: ToolRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/api/notes")
-async def generate_notes(req: ToolRequest):
+async def generate_notes(req: ToolRequest, user_id: str = Depends(get_current_user_id)):
     req.knowledge_mode = "strict_rag"
     client = get_async_groq_client()
     
@@ -1946,7 +2031,7 @@ async def generate_notes(req: ToolRequest):
         k = 10
         
     try:
-        docs = rag_service.search_similarity(query="important concepts outline guide summary definitions glossary key points", k=k, doc_filters=files)
+        docs = rag_service.search_similarity(query="important concepts outline guide summary definitions glossary key points", k=k, doc_filters=files, user_id=user_id)
     except Exception as e:
         logger.error(f"RAG search error in generate_notes: {e}")
         docs = []
@@ -2044,7 +2129,7 @@ async def generate_notes(req: ToolRequest):
     return StreamingResponse(stream_generator(), media_type="application/x-ndjson")
 
 @app.post("/api/planner")
-def generate_study_planner(req: PlannerRequest):
+def generate_study_planner(req: PlannerRequest, user_id: str = Depends(get_current_user_id)):
     """
     Creates a customized AI study schedule mapping daily study tasks and chapters based on uploaded files.
     """
@@ -2052,7 +2137,7 @@ def generate_study_planner(req: PlannerRequest):
     
     context_clips = []
     for fn in req.filenames[:3]: # Limit to first 3 files to fit prompts safely
-        docs = rag_service.search_similarity(query="table of contents outline index chapters", k=4, doc_filters=[fn])
+        docs = rag_service.search_similarity(query="table of contents outline index chapters", k=4, doc_filters=[fn], user_id=user_id)
         if docs:
             context_clips.append(f"Document: {fn}\nContents outline:\n" + "\n".join([d["content"] for d in docs]))
 
@@ -2506,13 +2591,15 @@ def add_header_footer(canvas, doc):
     canvas.restoreState()
 
 @app.post("/api/export-notes")
-def export_notes(req: ExportNotesRequest):
+def export_notes(req: ExportNotesRequest, user_id: str = Depends(get_current_user_id)):
     """
     Builds a beautifully styled PDF from markdown notes using ReportLab and sends it as a download.
     """
     import uuid
     pdf_filename = f"study_assistant_notes_{uuid.uuid4().hex[:8]}.pdf"
-    pdf_path = os.path.join(settings.UPLOAD_DIR, pdf_filename)
+    user_upload_dir = os.path.join(settings.UPLOAD_DIR, user_id)
+    os.makedirs(user_upload_dir, exist_ok=True)
+    pdf_path = os.path.join(user_upload_dir, pdf_filename)
 
     try:
         # Create PDF layout
@@ -2668,13 +2755,15 @@ def create_citations_block(citations: Optional[List[str]], width: float = 504.0)
     return flowables
 
 @app.post("/api/export-chat")
-def export_chat(req: ExportChatRequest):
+def export_chat(req: ExportChatRequest, user_id: str = Depends(get_current_user_id)):
     """
     Builds a beautifully styled PDF from chat messages history using ReportLab and sends it as a download.
     """
     import uuid
     pdf_filename = f"study_session_chat_{uuid.uuid4().hex[:8]}.pdf"
-    pdf_path = os.path.join(settings.UPLOAD_DIR, pdf_filename)
+    user_upload_dir = os.path.join(settings.UPLOAD_DIR, user_id)
+    os.makedirs(user_upload_dir, exist_ok=True)
+    pdf_path = os.path.join(user_upload_dir, pdf_filename)
 
     try:
         # Create PDF layout
@@ -2761,7 +2850,7 @@ class LimitValidationRequest(BaseModel):
     requested_count: int
 
 @app.post("/api/validate-limit")
-def validate_limit(req: LimitValidationRequest):
+def validate_limit(req: LimitValidationRequest, user_id: str = Depends(get_current_user_id)):
     """
     Estimates the maximum number of unique, high-quality flashcards or quiz questions
     that can be generated from the selected materials and validates the requested count.
@@ -2781,7 +2870,8 @@ def validate_limit(req: LimitValidationRequest):
             docs = rag_service.search_similarity(
                 query="table of contents outline index chapters key concepts main topics summaries", 
                 k=4, 
-                doc_filters=[fn]
+                doc_filters=[fn],
+                user_id=user_id
             )
             if docs:
                 context_clips.append(f"Document: {fn}\n" + "\n".join([d["content"] for d in docs]))

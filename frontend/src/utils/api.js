@@ -1,4 +1,25 @@
+import { supabase, isSupabaseConfigured } from './supabase';
+
 export const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+
+async function authenticatedFetch(url, options = {}) {
+  const headers = options.headers || {};
+  if (isSupabaseConfigured && supabase) {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      const token = session?.access_token;
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+    } catch (e) {
+      console.error("Error getting Supabase token:", e);
+    }
+  }
+  return fetch(url, {
+    ...options,
+    headers
+  });
+}
 
 export async function uploadFiles(files, chunkSize = 1000, chunkOverlap = 200, sessionId = null) {
   const formData = new FormData();
@@ -11,7 +32,7 @@ export async function uploadFiles(files, chunkSize = 1000, chunkOverlap = 200, s
     formData.append('session_id', sessionId);
   }
 
-  const response = await fetch(`${API_BASE_URL}/api/upload`, {
+  const response = await authenticatedFetch(`${API_BASE_URL}/api/upload`, {
     method: 'POST',
     body: formData,
   });
@@ -22,7 +43,7 @@ export async function uploadFiles(files, chunkSize = 1000, chunkOverlap = 200, s
 }
 
 export async function indexText(filename, text, ocrConfidence = 100.0, reconConfidence = null, semanticQuality = null, chunkSize = 1000, chunkOverlap = 200, sessionId = null) {
-  const response = await fetch(`${API_BASE_URL}/api/index-text`, {
+  const response = await authenticatedFetch(`${API_BASE_URL}/api/index-text`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -44,7 +65,7 @@ export async function indexText(filename, text, ocrConfidence = 100.0, reconConf
 }
 
 export async function correctOcrText(text) {
-  const response = await fetch(`${API_BASE_URL}/api/ocr/correct`, {
+  const response = await authenticatedFetch(`${API_BASE_URL}/api/ocr/correct`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ text }),
@@ -57,7 +78,7 @@ export async function correctOcrText(text) {
 }
 
 export async function listDocuments() {
-  const response = await fetch(`${API_BASE_URL}/api/documents`);
+  const response = await authenticatedFetch(`${API_BASE_URL}/api/documents`);
   if (!response.ok) {
     throw new Error('Failed to load documents');
   }
@@ -65,7 +86,7 @@ export async function listDocuments() {
 }
 
 export async function deleteDocument(filename) {
-  const response = await fetch(`${API_BASE_URL}/api/documents/${encodeURIComponent(filename)}`, {
+  const response = await authenticatedFetch(`${API_BASE_URL}/api/documents/${encodeURIComponent(filename)}`, {
     method: 'DELETE',
   });
   if (!response.ok) {
@@ -75,7 +96,7 @@ export async function deleteDocument(filename) {
 }
 
 export async function clearAllDocuments() {
-  const response = await fetch(`${API_BASE_URL}/api/documents/clear`, {
+  const response = await authenticatedFetch(`${API_BASE_URL}/api/documents/clear`, {
     method: 'POST',
   });
   if (!response.ok) {
@@ -91,7 +112,7 @@ export async function generateSummary(filenames, explanationMode = 'intermediate
     knowledge_mode: knowledgeMode,
     response_depth: responseDepth
   };
-  const response = await fetch(`${API_BASE_URL}/api/summary`, {
+  const response = await authenticatedFetch(`${API_BASE_URL}/api/summary`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
@@ -111,7 +132,7 @@ export async function generateFlashcards(filenames, explanationMode = 'intermedi
     response_depth: responseDepth,
     count: count
   };
-  const response = await fetch(`${API_BASE_URL}/api/flashcards`, {
+  const response = await authenticatedFetch(`${API_BASE_URL}/api/flashcards`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
@@ -131,7 +152,7 @@ export async function generateQuiz(filenames, explanationMode = 'intermediate', 
     response_depth: responseDepth,
     count: count
   };
-  const response = await fetch(`${API_BASE_URL}/api/quiz`, {
+  const response = await authenticatedFetch(`${API_BASE_URL}/api/quiz`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
@@ -144,7 +165,7 @@ export async function generateQuiz(filenames, explanationMode = 'intermediate', 
 }
 
 export async function validateLimit(filenames, tool, requestedCount) {
-  const response = await fetch(`${API_BASE_URL}/api/validate-limit`, {
+  const response = await authenticatedFetch(`${API_BASE_URL}/api/validate-limit`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -167,7 +188,7 @@ export async function generateQuestions(filenames, explanationMode = 'intermedia
     knowledge_mode: knowledgeMode,
     response_depth: responseDepth
   };
-  const response = await fetch(`${API_BASE_URL}/api/questions`, {
+  const response = await authenticatedFetch(`${API_BASE_URL}/api/questions`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
@@ -186,7 +207,7 @@ export async function extractFormulas(filenames, explanationMode = 'intermediate
     knowledge_mode: knowledgeMode,
     response_depth: responseDepth
   };
-  const response = await fetch(`${API_BASE_URL}/api/formulas`, {
+  const response = await authenticatedFetch(`${API_BASE_URL}/api/formulas`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
@@ -205,7 +226,7 @@ export async function extractDefinitions(filenames, explanationMode = 'intermedi
     knowledge_mode: knowledgeMode,
     response_depth: responseDepth
   };
-  const response = await fetch(`${API_BASE_URL}/api/definitions`, {
+  const response = await authenticatedFetch(`${API_BASE_URL}/api/definitions`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
@@ -218,7 +239,7 @@ export async function extractDefinitions(filenames, explanationMode = 'intermedi
 }
 
 export async function generateStudyPlan(filenames, timeframeWeeks = 4, dailyHours = 2.0) {
-  const response = await fetch(`${API_BASE_URL}/api/planner`, {
+  const response = await authenticatedFetch(`${API_BASE_URL}/api/planner`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ filenames, timeframe_weeks: timeframeWeeks, daily_hours: dailyHours }),
@@ -249,7 +270,7 @@ export async function streamNotes({
       response_depth: responseDepth
     };
 
-    const response = await fetch(`${API_BASE_URL}/api/notes`, {
+    const response = await authenticatedFetch(`${API_BASE_URL}/api/notes`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(payload),
@@ -307,9 +328,8 @@ export async function streamNotes({
   }
 }
 
-
 export async function exportNotes(markdownContent, title = 'Study Notes') {
-  const response = await fetch(`${API_BASE_URL}/api/export-notes`, {
+  const response = await authenticatedFetch(`${API_BASE_URL}/api/export-notes`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ markdown_content: markdownContent, title }),
@@ -345,7 +365,7 @@ export async function streamChat({
   onDone
 }) {
   try {
-    const response = await fetch(`${API_BASE_URL}/api/chat`, {
+    const response = await authenticatedFetch(`${API_BASE_URL}/api/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -422,7 +442,7 @@ export async function streamChat({
 }
 
 export async function exportChat(messages, sessionTitle = 'Study Session') {
-  const response = await fetch(`${API_BASE_URL}/api/export-chat`, {
+  const response = await authenticatedFetch(`${API_BASE_URL}/api/export-chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ messages, session_title: sessionTitle }),

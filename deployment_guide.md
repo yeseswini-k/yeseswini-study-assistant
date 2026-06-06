@@ -17,6 +17,8 @@ The React + Vite frontend is completely static and can be deployed for free.
    - **Output Directory:** `dist`
 4. Add the following Environment Variables in the Vercel Dashboard:
    - `VITE_API_URL`: *The URL of your deployed backend service (e.g. `https://your-backend.onrender.com`)*
+   - `VITE_SUPABASE_URL`: `https://ickvopxkwdkeinsodeqn.supabase.co`
+   - `VITE_SUPABASE_ANON_KEY`: *Your Supabase Anon Public Key* (starts with `sb_publishable_...`)
 5. The `vercel.json` rewrite file is already configured in the folder to handle React client-side routing.
 
 ### Options B: Netlify
@@ -50,8 +52,10 @@ The backend is built with FastAPI and runs on Uvicorn. Since it embeds text loca
    - `BACKEND_PORT`: `8000`
    - `BACKEND_HOST`: `0.0.0.0`
    - `FRONTEND_URL`: *The URL of your deployed frontend (e.g., `https://your-app.vercel.app`)*
-   - `CHROMA_DB_PATH`: `./backend/chroma_db` (or mount a persistent directory at `/data/chroma_db` and change this to `/data/chroma_db`)
-   - `UPLOAD_DIR`: `./backend/uploads` (or `/data/uploads`)
+   - `SUPABASE_URL`: `https://ickvopxkwdkeinsodeqn.supabase.co`
+   - `SUPABASE_KEY`: *Your Supabase Service Role Secret Key* (starts with `sb_secret_...`)
+   - `CHROMA_DB_PATH`: `./backend/chroma_db`
+   - `UPLOAD_DIR`: `./backend/uploads`
 
 ### Option B: Railway.app (Free / Developer Plan)
 1. Connect your GitHub repository to [Railway](https://railway.app).

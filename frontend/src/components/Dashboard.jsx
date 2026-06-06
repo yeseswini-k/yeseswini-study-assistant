@@ -1,6 +1,6 @@
-import React from 'react';
-import { FileText, Award, BookOpen, Trash2, Library, ChevronRight } from 'lucide-react';
-import { deleteDocument, listDocuments } from '../utils/api';
+import React, { useState, useRef } from 'react';
+import { FileText, Award, BookOpen, Trash2, Library, ChevronRight, UploadCloud, Loader2 } from 'lucide-react';
+import { deleteDocument, listDocuments, uploadFiles } from '../utils/api';
 
 export default function Dashboard({ 
   documents, 
@@ -11,6 +11,47 @@ export default function Dashboard({
   setActiveSessionId, 
   setActiveTab 
 }) {
+
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState('');
+  const fileInputRef = useRef(null);
+
+  const handleFileInputChange = (e) => {
+    if (e.target.files) {
+      handleFileUpload(Array.from(e.target.files));
+    }
+  };
+
+  const handleFileUpload = async (files) => {
+    setUploading(true);
+    setUploadError('');
+    try {
+      const response = await uploadFiles(files, 1000, 200);
+      const results = response.results || [];
+      const successfullyIndexed = [];
+      let uploadErrors = [];
+
+      results.forEach(res => {
+        if (res.status === 'success' || res.status === 'ocr_preview_required') {
+          successfullyIndexed.push(res.filename);
+        } else if (res.status === 'error') {
+          uploadErrors.push(`${res.filename}: ${res.message}`);
+        }
+      });
+
+      if (successfullyIndexed.length > 0) {
+        const docs = await listDocuments();
+        setDocuments(docs);
+      }
+      if (uploadErrors.length > 0) {
+        setUploadError(uploadErrors.join('; '));
+      }
+    } catch (err) {
+      setUploadError(err.message || 'Error indexing documents.');
+    } finally {
+      setUploading(false);
+    }
+  };
 
   const handleDelete = async (filename, e) => {
     e.stopPropagation();
@@ -77,7 +118,33 @@ export default function Dashboard({
             {documents.length === 0 ? (
               <div className="flex flex-col items-center justify-center py-10 text-center">
                 <Library className="w-10 h-10 text-slate-700 mb-3" />
-                <p className="text-sm text-slate-500 italic">No files uploaded yet. Switch to Study Chat to index your first PDF.</p>
+                <p className="text-sm text-slate-500 italic mb-4">No files uploaded yet.</p>
+                <div 
+                  onClick={() => fileInputRef.current.click()}
+                  className="border border-dashed border-white/10 hover:border-gold/30 hover:bg-white/5 rounded-xl p-6 flex flex-col items-center justify-center cursor-pointer transition-all bg-slate-950/20 max-w-xs w-full"
+                >
+                  <input
+                    type="file"
+                    multiple
+                    accept=".pdf, .jpg, .jpeg, .png, image/*"
+                    ref={fileInputRef}
+                    onChange={handleFileInputChange}
+                    className="hidden"
+                  />
+                  {uploading ? (
+                    <div className="flex items-center gap-2 py-1">
+                      <Loader2 className="w-4 h-4 text-gold animate-spin" />
+                      <span className="text-[10px] text-slate-300 font-medium font-sans">Processing file...</span>
+                    </div>
+                  ) : (
+                    <>
+                      <UploadCloud className="w-6 h-6 text-gold mb-1" />
+                      <span className="text-[9px] text-slate-300 font-semibold font-sans">Upload PDF / Image</span>
+                      <span className="text-[8px] text-slate-500 mt-0.5 font-sans">Click or drag & drop</span>
+                    </>
+                  )}
+                </div>
+                {uploadError && <p className="text-[9px] text-rose-400 mt-1.5 bg-rose-950/20 border border-rose-500/20 px-2.5 py-1 rounded-lg truncate max-w-xs">{uploadError}</p>}
               </div>
             ) : (
               <div className="space-y-3 max-h-[260px] overflow-y-auto pr-1">

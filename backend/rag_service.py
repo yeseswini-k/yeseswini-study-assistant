@@ -3,9 +3,11 @@ import re
 from typing import List, Dict, Any
 from pypdf import PdfReader
 from langchain_community.vectorstores import Chroma
-from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from backend.config import settings
+try:
+    from backend.config import settings
+except (ModuleNotFoundError, ImportError):
+    from config import settings
 
 def sanitize_chunk_text(text: str) -> str:
     if not text:
@@ -56,20 +58,50 @@ def sanitize_chunk_text(text: str) -> str:
 
 class RAGService:
     def __init__(self):
-        print("Initializing Embedding Model (sentence-transformers/all-MiniLM-L6-v2)...")
-        # Load HuggingFace embeddings locally
-        self.embeddings = HuggingFaceEmbeddings(
-            model_name="sentence-transformers/all-MiniLM-L6-v2",
-            model_kwargs={'device': 'cpu'}
-        )
-        # Create vectorstore wrapper
-        self.vectorstore = Chroma(
-            persist_directory=settings.CHROMA_DB_PATH,
-            embedding_function=self.embeddings,
-            collection_name="study_assistant_collection"
-        )
+        hf_api_key = os.getenv("HUGGINGFACE_API_KEY")
+        if hf_api_key:
+            print("Initializing Hugging Face Inference API Embeddings...")
+            from langchain_community.embeddings import HuggingFaceInferenceAPIEmbeddings
+            self.embeddings = HuggingFaceInferenceAPIEmbeddings(
+                api_key=hf_api_key,
+                model_name="sentence-transformers/all-MiniLM-L6-v2"
+            )
+        else:
+            print("HUGGINGFACE_API_KEY not found. Initializing local HuggingFace Embeddings (Fallback)...")
+            try:
+                from langchain_community.embeddings import HuggingFaceEmbeddings
+                self.embeddings = HuggingFaceEmbeddings(
+                    model_name="sentence-transformers/all-MiniLM-L6-v2",
+                    model_kwargs={'device': 'cpu'}
+                )
+            except ImportError as e:
+                raise ImportError(
+                    "sentence-transformers is not installed. To run locally, please add HUGGINGFACE_API_KEY to your environment variables "
+                    "or install sentence-transformers locally."
+                ) from e
+        self.user_stores = {}
 
-    def process_and_index_pdf(self, file_path: str, filename: str, chunk_size: int = 1000, chunk_overlap: int = 200, session_id: str = None, upload_type: str = "typed_pdf", source_type: str = "pdf", ocr_flag: bool = False) -> Dict[str, Any]:
+    def get_user_vectorstore(self, user_id: str) -> Chroma:
+        if user_id not in self.user_stores:
+            from backend.supabase_helper import sync_chroma_from_cloud
+            sync_chroma_from_cloud(user_id, settings.CHROMA_DB_PATH)
+            
+            user_db_path = os.path.join(settings.CHROMA_DB_PATH, user_id)
+            os.makedirs(user_db_path, exist_ok=True)
+            self.user_stores[user_id] = Chroma(
+                persist_directory=user_db_path,
+                embedding_function=self.embeddings,
+                collection_name=f"study_collection_{user_id}"
+            )
+        return self.user_stores[user_id]
+
+    def persist_user_vectorstore(self, user_id: str):
+        if user_id in self.user_stores:
+            self.user_stores[user_id].persist()
+            from backend.supabase_helper import sync_chroma_to_cloud
+            sync_chroma_to_cloud(user_id, settings.CHROMA_DB_PATH)
+
+    def process_and_index_pdf(self, file_path: str, filename: str, chunk_size: int = 1000, chunk_overlap: int = 200, session_id: str = None, upload_type: str = "typed_pdf", source_type: str = "pdf", ocr_flag: bool = False, user_id: str = "local-user") -> Dict[str, Any]:
         """
         Reads a PDF, splits text into chunks, and indexes it in ChromaDB with metadata.
         """
@@ -115,10 +147,18 @@ class RAGService:
                 texts.append(chunk)
                 metadatas.append(doc["metadata"])
 
-        # Add to vector database
+        # Add to vector database in small batches to prevent memory spikes / OOM crashes on free tiers (512MB RAM)
         if texts:
-            self.vectorstore.add_texts(texts=texts, metadatas=metadatas)
-            self.vectorstore.persist()
+            user_vectorstore = self.get_user_vectorstore(user_id)
+            batch_size = 16
+            for i in range(0, len(texts), batch_size):
+                batch_texts = texts[i:i + batch_size]
+                batch_metadatas = metadatas[i:i + batch_size]
+                user_vectorstore.add_texts(texts=batch_texts, metadatas=batch_metadatas)
+                import gc
+                gc.collect()
+            
+            self.persist_user_vectorstore(user_id)
             return {
                 "status": "success",
                 "chunks_count": len(texts),
@@ -127,7 +167,7 @@ class RAGService:
         
         return {"status": "error", "message": "No text chunks generated."}
 
-    def index_text(self, text: str, filename: str, chunk_size: int = 1000, chunk_overlap: int = 200, session_id: str = None, upload_type: str = "text", source_type: str = "text", ocr_flag: bool = False) -> Dict[str, Any]:
+    def index_text(self, text: str, filename: str, chunk_size: int = 1000, chunk_overlap: int = 200, session_id: str = None, upload_type: str = "text", source_type: str = "text", ocr_flag: bool = False, user_id: str = "local-user") -> Dict[str, Any]:
         """
         Parses page tags from text, splits into chunks, and indexes it in ChromaDB with metadata.
         """
@@ -176,10 +216,18 @@ class RAGService:
                     "ocr_flag": ocr_flag
                 })
                 
-        # Add to vector database
+        # Add to vector database in small batches to prevent memory spikes / OOM crashes on free tiers (512MB RAM)
         if texts:
-            self.vectorstore.add_texts(texts=texts, metadatas=metadatas)
-            self.vectorstore.persist()
+            user_vectorstore = self.get_user_vectorstore(user_id)
+            batch_size = 16
+            for i in range(0, len(texts), batch_size):
+                batch_texts = texts[i:i + batch_size]
+                batch_metadatas = metadatas[i:i + batch_size]
+                user_vectorstore.add_texts(texts=batch_texts, metadatas=batch_metadatas)
+                import gc
+                gc.collect()
+            
+            self.persist_user_vectorstore(user_id)
             return {
                 "status": "success",
                 "chunks_count": len(texts),
@@ -188,7 +236,7 @@ class RAGService:
             
         return {"status": "error", "message": "No text chunks generated."}
 
-    def index_structured_text(self, filename: str, text: str, analysis: dict, ocr_confidence: float = 100.0, chunk_size: int = 1000, chunk_overlap: int = 200, session_id: str = None, upload_type: str = "image", source_type: str = "image", ocr_flag: bool = True) -> dict:
+    def index_structured_text(self, filename: str, text: str, analysis: dict, ocr_confidence: float = 100.0, chunk_size: int = 1000, chunk_overlap: int = 200, session_id: str = None, upload_type: str = "image", source_type: str = "image", ocr_flag: bool = True, user_id: str = "local-user") -> dict:
         """
         Splits text by its semantic sections from the LLM analysis and indexes them with structured metadata and rich hybrid text.
         """
@@ -306,10 +354,18 @@ class RAGService:
                     "ocr_flag": ocr_flag
                 })
                 
-        # Add to vector database
+        # Add to vector database in small batches to prevent memory spikes / OOM crashes on free tiers (512MB RAM)
         if texts:
-            self.vectorstore.add_texts(texts=texts, metadatas=metadatas)
-            self.vectorstore.persist()
+            user_vectorstore = self.get_user_vectorstore(user_id)
+            batch_size = 16
+            for i in range(0, len(texts), batch_size):
+                batch_texts = texts[i:i + batch_size]
+                batch_metadatas = metadatas[i:i + batch_size]
+                user_vectorstore.add_texts(texts=batch_texts, metadatas=batch_metadatas)
+                import gc
+                gc.collect()
+            
+            self.persist_user_vectorstore(user_id)
             return {
                 "status": "success",
                 "chunks_count": len(texts),
@@ -318,7 +374,7 @@ class RAGService:
             
         return {"status": "error", "message": "No text chunks generated."}
 
-    def search_similarity(self, query: str, k: int = 4, doc_filters: List[str] = None) -> List[Dict[str, Any]]:
+    def search_similarity(self, query: str, k: int = 4, doc_filters: List[str] = None, user_id: str = "local-user") -> List[Dict[str, Any]]:
         """
         Search similarity using query and return match chunks with score.
         Upgraded with hybrid retrieval, metadata filtering, and OCR confidence weighting.
@@ -342,7 +398,8 @@ class RAGService:
 
         # Fetch more candidates for reranking (e.g., k * 3)
         candidate_k = max(k * 3, 12)
-        results = self.vectorstore.similarity_search_with_score(
+        user_vectorstore = self.get_user_vectorstore(user_id)
+        results = user_vectorstore.similarity_search_with_score(
             query, 
             k=candidate_k, 
             filter=search_filter
@@ -426,41 +483,45 @@ class RAGService:
         # Return top k results
         return formatted_results[:k]
 
-    def search_all_documents(self, query: str, k: int = 10) -> List[Dict[str, Any]]:
+    def search_all_documents(self, query: str, k: int = 10, user_id: str = "local-user") -> List[Dict[str, Any]]:
         """
         General retrieval for search matching documents without filters.
         """
-        return self.search_similarity(query, k=k)
+        return self.search_similarity(query, k=k, user_id=user_id)
 
-    def delete_document(self, filename: str) -> bool:
+    def delete_document(self, filename: str, user_id: str = "local-user") -> bool:
         """
         Deletes chunks matching the filename source from the DB.
         """
         try:
+            user_vectorstore = self.get_user_vectorstore(user_id)
             # chroma allows deleting by metadata matches
-            collection = self.vectorstore._collection
+            collection = user_vectorstore._collection
             collection.delete(where={"source": filename})
-            self.vectorstore.persist()
+            self.persist_user_vectorstore(user_id)
             return True
         except Exception as e:
-            print(f"Error deleting document {filename}: {e}")
+            print(f"Error deleting document {filename} for user {user_id}: {e}")
             return False
 
-    def clear_all(self) -> bool:
+    def clear_all(self, user_id: str = "local-user") -> bool:
         """
         Clears all items in Chroma DB.
         """
         try:
-            self.vectorstore.delete_collection()
+            user_vectorstore = self.get_user_vectorstore(user_id)
+            user_vectorstore.delete_collection()
             # Recreate collection
-            self.vectorstore = Chroma(
-                persist_directory=settings.CHROMA_DB_PATH,
+            user_db_path = os.path.join(settings.CHROMA_DB_PATH, user_id)
+            self.user_stores[user_id] = Chroma(
+                persist_directory=user_db_path,
                 embedding_function=self.embeddings,
-                collection_name="study_assistant_collection"
+                collection_name=f"study_collection_{user_id}"
             )
+            self.persist_user_vectorstore(user_id)
             return True
         except Exception as e:
-            print(f"Error clearing vector database: {e}")
+            print(f"Error clearing vector database for user {user_id}: {e}")
             return False
 
 rag_service = RAGService()

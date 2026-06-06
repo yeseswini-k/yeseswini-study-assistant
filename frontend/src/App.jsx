@@ -8,8 +8,35 @@ import StudyPlanner from './components/StudyPlanner';
 import SettingsModal from './components/SettingsModal';
 import FloatingParticles from './components/FloatingParticles';
 import { listDocuments, API_BASE_URL } from './utils/api';
+import Auth from './components/Auth';
+import { supabase, isSupabaseConfigured } from './utils/supabase';
+import { Sparkles, Loader } from 'lucide-react';
 
 export default function App() {
+  const [user, setUser] = useState(null);
+  const [authLoading, setAuthLoading] = useState(isSupabaseConfigured);
+
+  useEffect(() => {
+    if (!isSupabaseConfigured || !supabase) {
+      setAuthLoading(false);
+      return;
+    }
+    
+    // Get initial session
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setUser(session?.user ?? null);
+      setAuthLoading(false);
+    });
+
+    // Listen for changes
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null);
+      setAuthLoading(false);
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
   const [activeTab, setActiveTab] = useState('chat');
   const [documents, setDocumentsState] = useState([]);
   const setDocuments = (docsOrFn) => {
@@ -114,6 +141,9 @@ export default function App() {
   // Synchronize initial data
   useEffect(() => {
     const checkConnection = async () => {
+      if (authLoading) return;
+      if (isSupabaseConfigured && !user) return;
+
       try {
         const response = await fetch(`${API_BASE_URL}/api/health`);
         if (response.ok) {
@@ -128,7 +158,7 @@ export default function App() {
       }
     };
     checkConnection();
-  }, []);
+  }, [user, authLoading]);
 
   const handleUpdateStreak = () => {
     setStreakCount(prev => {
@@ -148,6 +178,25 @@ export default function App() {
     localStorage.setItem('study_rag_settings', JSON.stringify(newSettings));
   };
 
+  if (authLoading) {
+    return (
+      <div className="min-h-screen w-full flex items-center justify-center bg-navy-950 relative overflow-hidden">
+        <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_-20%,#2a2015_0%,#0c0a09_70%)]" />
+        <div className="z-10 flex flex-col items-center gap-3">
+          <div className="p-3.5 rounded-2xl bg-gradient-to-br from-gold-dark/20 to-gold/5 border border-gold/30 gold-glow mb-2 animate-bounce">
+            <Sparkles className="w-8 h-8 text-gold" />
+          </div>
+          <Loader className="w-6 h-6 text-gold animate-spin" />
+          <span className="text-slate-400 text-xs font-light tracking-wide">Syncing study environment...</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (isSupabaseConfigured && !user) {
+    return <Auth onAuthSuccess={() => {}} theme={theme} onToggleTheme={handleToggleTheme} />;
+  }
+
   return (
     <div className={`h-full flex flex-col overflow-hidden font-sans select-none relative transition-colors duration-300 ${
       theme === 'light' ? 'light-theme bg-slate-50' : 'bg-navy-950'
@@ -163,6 +212,7 @@ export default function App() {
         isOffline={isOffline}
         theme={theme}
         onToggleTheme={handleToggleTheme}
+        user={user}
       />
 
       {/* Main app body */}
