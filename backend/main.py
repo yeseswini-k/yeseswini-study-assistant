@@ -27,7 +27,6 @@ import pytesseract
 from PIL import Image
 import io
 import cv2
-import easyocr
 import numpy as np
 
 # Set up logging
@@ -612,6 +611,7 @@ def get_easyocr_reader():
     global _easyocr_reader
     if _easyocr_reader is None:
         logger.info("Initializing EasyOCR English Reader...")
+        import easyocr
         _easyocr_reader = easyocr.Reader(['en'])
     return _easyocr_reader
 
