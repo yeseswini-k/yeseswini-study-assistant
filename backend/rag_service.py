@@ -66,18 +66,12 @@ class RAGService:
                 model_name="sentence-transformers/all-MiniLM-L6-v2"
             )
         else:
-            print("HUGGINGFACE_API_KEY not found. Initializing local HuggingFace Embeddings (Fallback)...")
-            try:
-                from langchain_community.embeddings import HuggingFaceEmbeddings
-                self.embeddings = HuggingFaceEmbeddings(
-                    model_name="sentence-transformers/all-MiniLM-L6-v2",
-                    model_kwargs={'device': 'cpu'}
-                )
-            except ImportError as e:
-                raise ImportError(
-                    "sentence-transformers is not installed. To run locally, please add HUGGINGFACE_API_KEY to your environment variables "
-                    "or install sentence-transformers locally."
-                ) from e
+            raise RuntimeError(
+                "CRITICAL ERROR: HUGGINGFACE_API_KEY environment variable is not set. "
+                "The Hugging Face Inference API is required to run lightweight embeddings. "
+                "To prevent Out-Of-Memory (OOM) crashes, local model fallback is disabled. "
+                "Please configure HUGGINGFACE_API_KEY in your environment variables (e.g. on Render dashboard)."
+            )
         self.user_stores = {}
 
     def get_user_vectorstore(self, user_id: str) -> "Chroma":

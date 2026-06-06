@@ -33,6 +33,19 @@ import numpy as np
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Log diagnostic startup information
+import resource
+import sys
+logger.info("=========================================")
+logger.info(f"STARTUP RAM USAGE: {resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024:.2f} MB")
+logger.info(f"Is torch loaded? {'torch' in sys.modules}")
+logger.info(f"Is easyocr loaded? {'easyocr' in sys.modules}")
+logger.info(f"HUGGINGFACE_API_KEY set: {bool(os.getenv('HUGGINGFACE_API_KEY'))}")
+logger.info(f"GROQ_API_KEY set: {bool(os.getenv('GROQ_API_KEY'))}")
+logger.info(f"SUPABASE_URL set: {bool(os.getenv('SUPABASE_URL'))}")
+logger.info(f"SUPABASE_KEY set: {bool(os.getenv('SUPABASE_KEY'))}")
+logger.info("=========================================")
+
 app = FastAPI(title="AI Study Assistant Pro API")
 
 # Configure CORS
