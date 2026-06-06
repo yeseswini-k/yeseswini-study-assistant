@@ -1,12 +1,125 @@
 import os
 import re
+import json
+import numpy as np
 from typing import List, Dict, Any
 from pypdf import PdfReader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_core.documents import Document
 try:
     from backend.config import settings
 except (ModuleNotFoundError, ImportError):
     from config import settings
+
+class SimpleVectorStore:
+    def __init__(self, persist_directory: str, embedding_function: Any, collection_name: str):
+        self.persist_directory = persist_directory
+        self.embedding_function = embedding_function
+        self.collection_name = collection_name
+        self.file_path = os.path.join(persist_directory, "vectors.json")
+        self.data = []
+        self.load()
+
+    def load(self):
+        if os.path.exists(self.file_path):
+            try:
+                with open(self.file_path, "r") as f:
+                    self.data = json.load(f)
+            except Exception as e:
+                print(f"Error loading vector store: {e}")
+                self.data = []
+
+    def persist(self):
+        os.makedirs(self.persist_directory, exist_ok=True)
+        try:
+            with open(self.file_path, "w") as f:
+                json.dump(self.data, f)
+        except Exception as e:
+            print(f"Error persisting vector store: {e}")
+
+    def add_texts(self, texts: List[str], metadatas: List[Dict[str, Any]]):
+        if not texts:
+            return
+        embeddings = self.embedding_function.embed_documents(texts)
+        for text, meta, emb in zip(texts, metadatas, embeddings):
+            self.data.append({
+                "text": text,
+                "embedding": emb,
+                "metadata": meta
+            })
+
+    def similarity_search_with_score(self, query: str, k: int = 4, filter: Dict[str, Any] = None) -> List[tuple]:
+        if not self.data:
+            return []
+        
+        query_emb = self.embedding_function.embed_query(query)
+        query_vector = np.array(query_emb)
+        
+        candidates = []
+        for item in self.data:
+            meta = item["metadata"]
+            if filter:
+                match = True
+                if "$or" in filter:
+                    match = False
+                    for cond in filter["$or"]:
+                        for key, val in cond.items():
+                            doc_val = meta.get(key)
+                            if isinstance(val, dict) and "$in" in val:
+                                if doc_val in val["$in"]:
+                                    match = True
+                            else:
+                                if doc_val == val:
+                                    match = True
+                if not match:
+                    continue
+            candidates.append(item)
+            
+        if not candidates:
+            return []
+            
+        vectors = np.array([item["embedding"] for item in candidates])
+        dot_products = np.dot(vectors, query_vector)
+        norms = np.linalg.norm(vectors, axis=1) * np.linalg.norm(query_vector)
+        
+        norms[norms == 0] = 1e-9
+        similarities = dot_products / norms
+        
+        results = []
+        for i, item in enumerate(candidates):
+            doc = Document(page_content=item["text"], metadata=item["metadata"])
+            distance = float(1.0 - similarities[i])
+            results.append((doc, distance))
+            
+        results.sort(key=lambda x: x[1])
+        return results[:k]
+
+    def delete_collection(self):
+        self.data = []
+        if os.path.exists(self.file_path):
+            try:
+                os.remove(self.file_path)
+            except Exception:
+                pass
+
+    @property
+    def _collection(self):
+        class MockCollection:
+            def __init__(self, parent):
+                self.parent = parent
+            def delete(self, where: Dict[str, Any]):
+                if not where:
+                    return
+                new_data = []
+                for item in self.parent.data:
+                    match = True
+                    for key, val in where.items():
+                        if item["metadata"].get(key) != val:
+                            match = False
+                    if not match:
+                        new_data.append(item)
+                self.parent.data = new_data
+        return MockCollection(self)
 
 def sanitize_chunk_text(text: str) -> str:
     if not text:
@@ -70,7 +183,7 @@ class RAGService:
             self.embeddings = None
         self.user_stores = {}
 
-    def get_user_vectorstore(self, user_id: str) -> "Chroma":
+    def get_user_vectorstore(self, user_id: str) -> "SimpleVectorStore":
         if not self.embeddings:
             raise RuntimeError(
                 "CRITICAL ERROR: HUGGINGFACE_API_KEY environment variable is not configured. "
@@ -83,8 +196,7 @@ class RAGService:
             
             user_db_path = os.path.join(settings.CHROMA_DB_PATH, user_id)
             os.makedirs(user_db_path, exist_ok=True)
-            from langchain_community.vectorstores import Chroma
-            self.user_stores[user_id] = Chroma(
+            self.user_stores[user_id] = SimpleVectorStore(
                 persist_directory=user_db_path,
                 embedding_function=self.embeddings,
                 collection_name=f"study_collection_{user_id}"
@@ -509,8 +621,7 @@ class RAGService:
             user_vectorstore.delete_collection()
             # Recreate collection
             user_db_path = os.path.join(settings.CHROMA_DB_PATH, user_id)
-            from langchain_community.vectorstores import Chroma
-            self.user_stores[user_id] = Chroma(
+            self.user_stores[user_id] = SimpleVectorStore(
                 persist_directory=user_db_path,
                 embedding_function=self.embeddings,
                 collection_name=f"study_collection_{user_id}"
