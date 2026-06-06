@@ -2,7 +2,6 @@ import os
 import re
 from typing import List, Dict, Any
 from pypdf import PdfReader
-from langchain_community.vectorstores import Chroma
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 try:
     from backend.config import settings
@@ -81,13 +80,14 @@ class RAGService:
                 ) from e
         self.user_stores = {}
 
-    def get_user_vectorstore(self, user_id: str) -> Chroma:
+    def get_user_vectorstore(self, user_id: str) -> "Chroma":
         if user_id not in self.user_stores:
             from backend.supabase_helper import sync_chroma_from_cloud
             sync_chroma_from_cloud(user_id, settings.CHROMA_DB_PATH)
             
             user_db_path = os.path.join(settings.CHROMA_DB_PATH, user_id)
             os.makedirs(user_db_path, exist_ok=True)
+            from langchain_community.vectorstores import Chroma
             self.user_stores[user_id] = Chroma(
                 persist_directory=user_db_path,
                 embedding_function=self.embeddings,
@@ -513,6 +513,7 @@ class RAGService:
             user_vectorstore.delete_collection()
             # Recreate collection
             user_db_path = os.path.join(settings.CHROMA_DB_PATH, user_id)
+            from langchain_community.vectorstores import Chroma
             self.user_stores[user_id] = Chroma(
                 persist_directory=user_db_path,
                 embedding_function=self.embeddings,
