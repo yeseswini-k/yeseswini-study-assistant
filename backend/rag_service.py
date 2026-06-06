@@ -66,15 +66,17 @@ class RAGService:
                 model_name="sentence-transformers/all-MiniLM-L6-v2"
             )
         else:
-            raise RuntimeError(
-                "CRITICAL ERROR: HUGGINGFACE_API_KEY environment variable is not set. "
-                "The Hugging Face Inference API is required to run lightweight embeddings. "
-                "To prevent Out-Of-Memory (OOM) crashes, local model fallback is disabled. "
-                "Please configure HUGGINGFACE_API_KEY in your environment variables (e.g. on Render dashboard)."
-            )
+            print("WARNING: HUGGINGFACE_API_KEY is not set. RAG operations will fail.")
+            self.embeddings = None
         self.user_stores = {}
 
     def get_user_vectorstore(self, user_id: str) -> "Chroma":
+        if not self.embeddings:
+            raise RuntimeError(
+                "CRITICAL ERROR: HUGGINGFACE_API_KEY environment variable is not configured. "
+                "Hugging Face Inference API Embeddings are required to load/create vectorstores. "
+                "Please configure HUGGINGFACE_API_KEY in your environment variables on Render."
+            )
         if user_id not in self.user_stores:
             from backend.supabase_helper import sync_chroma_from_cloud
             sync_chroma_from_cloud(user_id, settings.CHROMA_DB_PATH)
