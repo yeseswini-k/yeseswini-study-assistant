@@ -1,69 +1,81 @@
-# Yeseswini's AI Study Assistant - Deployment Guide
+# AI Study Assistant Pro - Deployment Guide
 
-This guide provides step-by-step instructions to deploy the application's frontend and backend services for free.
+This guide provides step-by-step instructions to deploy the application's frontend and backend services for **100% free** and with **zero memory limits**, using **Vercel** (for the frontend) and **Hugging Face Spaces** (for the backend).
 
 ---
 
-## 💻 1. Frontend Deployment (Vercel or Netlify)
+## 🌐 1. Frontend Deployment (Vercel)
 
-The React + Vite frontend is completely static and can be deployed for free.
+The React + Vite frontend compiles into static HTML/JS/CSS, making it perfect for hosting on Vercel's free tier.
 
-### Options A: Vercel (Recommended)
-1. Install Vercel CLI globally or use the [Vercel Dashboard](https://vercel.com).
-2. Connect your Git Repository.
+1. Sign up on [Vercel](https://vercel.com).
+2. Click **Add New > Project** and import your GitHub repository.
 3. Configure the Project Settings:
    - **Framework Preset:** `Vite`
+   - **Root Directory:** `frontend`
    - **Build Command:** `npm run build`
    - **Output Directory:** `dist`
-4. Add the following Environment Variables in the Vercel Dashboard:
-   - `VITE_API_URL`: *The URL of your deployed backend service (e.g. `https://your-backend.onrender.com`)*
+4. Add the following **Environment Variables**:
+   - `VITE_API_URL`: *Your Hugging Face Space App URL* (e.g. `https://your-username-space-name.hf.space` - note: do **not** use the embedding iframe URL, use the direct `.hf.space` link).
    - `VITE_SUPABASE_URL`: `https://ickvopxkwdkeinsodeqn.supabase.co`
-   - `VITE_SUPABASE_ANON_KEY`: *Your Supabase Anon Public Key* (starts with `sb_publishable_...`)
-5. The `vercel.json` rewrite file is already configured in the folder to handle React client-side routing.
-
-### Options B: Netlify
-1. Connect your Git repository to [Netlify Dashboard](https://app.netlify.com).
-2. Set Build Settings:
-   - **Build Command:** `npm run build`
-   - **Publish Directory:** `frontend/dist`
-   - **Base Directory:** `frontend`
-3. Add Environment Variables:
-   - `VITE_API_URL`: *Your deployed backend service URL*
-4. To support routing in Netlify, create a file named `_redirects` in your `public` folder with:
-   ```text
-   /*   /index.html   200
-   ```
+   - `VITE_SUPABASE_ANON_KEY`: *Your Supabase Anon Key* (starts with `sb_publishable_...`)
+5. Click **Deploy**. Vercel will build and serve your frontend for free.
 
 ---
 
-## 🐍 2. Backend Deployment (Render or Railway)
+## 🐍 2. Backend Deployment (Hugging Face Spaces)
 
-The backend is built with FastAPI and runs on Uvicorn. Since it embeds text local-embedding vectors with sentence-transformers and stores vectors in ChromaDB, make sure to provision a service disk or use persistent disk mounts if you want uploaded files to persist across redeployments.
+Hugging Face Spaces provides a **16 GB RAM Docker Environment** completely for free. This runs the FastAPI Python backend with plenty of room, preventing any Out-Of-Memory (OOM) crashes.
 
-### Option A: Render.com (Free Web Service)
-1. Sign up on [Render](https://render.com) and click **New > Web Service**.
-2. Connect your Git repository.
-3. Configure settings:
-   - **Runtime:** `Python`
-   - **Build Command:** `pip install -r requirements.txt`
-   - **Start Command:** `uvicorn backend.main:app --host 0.0.0.0 --port $PORT`
-4. Set Environment Variables in **Environment** tab:
-   - `GROQ_API_KEY`: *Your active Groq key*
-   - `BACKEND_PORT`: `8000`
-   - `BACKEND_HOST`: `0.0.0.0`
-   - `FRONTEND_URL`: *The URL of your deployed frontend (e.g., `https://your-app.vercel.app`)*
-   - `SUPABASE_URL`: `https://ickvopxkwdkeinsodeqn.supabase.co`
-   - `SUPABASE_KEY`: *Your Supabase Service Role Secret Key* (starts with `sb_secret_...`)
-   - `CHROMA_DB_PATH`: `./backend/chroma_db`
-   - `UPLOAD_DIR`: `./backend/uploads`
+### Step 1: Create the Space on Hugging Face
+1. Sign in or sign up at [Hugging Face](https://huggingface.co).
+2. Click on your profile picture in the top-right corner and select **New Space** (or go to [huggingface.co/new-space](https://huggingface.co/new-space)).
+3. Fill in the Space settings:
+   - **Space Name:** `study-assistant-backend` (or a name of your choice).
+   - **License:** `mit`
+   - **Select the Space SDK:** Select **Docker** (very important!).
+   - **Docker Template:** Choose **Blank** (do not select other templates).
+   - **Space Hardware:** Keep the default **CPU Basic (Free, 16GB RAM)**.
+   - **Visibility:** **Public** or **Private** (we recommend **Public**; your secrets are secure and hidden from the public).
+4. Click **Create Space** at the bottom.
 
-### Option B: Railway.app (Free / Developer Plan)
-1. Connect your GitHub repository to [Railway](https://railway.app).
-2. Add a new service from your repo.
-3. Railway automatically detects the Python environment and Uvicorn. If needed, configure the start command in variables or create a `Procfile` at the root:
-   ```text
-   web: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
+### Step 2: Set Environment Variables / Secrets
+To keep your API keys hidden and secure:
+1. Inside your newly created Space, navigate to the **Settings** tab.
+2. Scroll down to the **Variables and Secrets** section.
+3. Add the following **Secrets** (Key-Value pairs) one by one by clicking **New Secret** (copy the values from your local `.env` file):
+   * **`HUGGINGFACE_API_KEY`**: *(Copy HUGGINGFACE_API_KEY from your local .env file)*
+   * **`GROQ_API_KEY`**: *(Copy GROQ_API_KEY from your local .env file)*
+   * **`SUPABASE_URL`**: `https://ickvopxkwdkeinsodeqn.supabase.co`
+   * **`SUPABASE_KEY`**: *(Copy SUPABASE_KEY from your local .env file)*
+   * **`PYTHONUNBUFFERED`**: `1`
+
+### Step 3: Push Your Code Directly to Hugging Face
+You can push your local git repository directly to Hugging Face Spaces:
+1. In your local terminal, navigate to your project root and add the Hugging Face Space repository as a new remote:
+   ```bash
+   git remote add hf https://huggingface.co/spaces/YOUR_USERNAME/YOUR_SPACE_NAME
    ```
-4. Define variables:
-   - `GROQ_API_KEY`: *Your active Groq key*
-   - `FRONTEND_URL`: *Your frontend Vercel URL*
+   *(Replace `YOUR_USERNAME` and `YOUR_SPACE_NAME` with your Hugging Face username and the name you gave the Space).*
+2. Push your `main` branch directly to the Hugging Face remote:
+   ```bash
+   git push -f hf main
+   ```
+   *(If prompted, log in with your Hugging Face username and use your **Hugging Face User Access Token** as the password).*
+
+### Step 4: Access Your Deployed API
+Once pushed, Hugging Face will automatically read the `Dockerfile`, install the requirements, and boot the FastAPI server on port `7860`.
+* The status will change to **Building** -> **Running**.
+* Your public API endpoint is:
+  `https://YOUR_USERNAME-YOUR_SPACE_NAME.hf.space`
+* You can test it by going to `https://YOUR_USERNAME-YOUR_SPACE_NAME.hf.space/api/health` in your browser. It should return `{"status": "healthy", ...}`.
+
+---
+
+## 💾 3. Data Persistence Notes
+Since Hugging Face Spaces run inside ephemeral Docker containers, any files created locally on the container's disk are wiped when the container restarts. 
+
+**This is fully expected and handled!** The backend is designed with Supabase integration:
+* Every time you upload a document, the backend automatically zips the local storage vectors and pushes them to your Supabase Storage bucket.
+* When you request information or chat, the backend automatically pulls your database down from Supabase, updates it, and syncs it back up.
+* This ensures that your files and study progress are **100% persistent** regardless of container resets.
